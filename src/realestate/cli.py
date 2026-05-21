@@ -333,5 +333,74 @@ def sheet_test_cmd() -> None:
     console.print(f"[green]Done.[/green] inserted={inserted} updated={updated}")
 
 
+@cli.command("clean")
+@click.option("--dry-run", is_flag=True, help="Report what would be removed without changing anything.")
+def clean_cmd(dry_run: bool) -> None:
+    """Re-apply current filters against everything in the DB+Sheet and prune.
+
+    Use after tightening the broker/realtor heuristic or dedup rules. Loads all
+    listings, re-runs looks_like_realtor on owner_name, then runs the
+    multi-listing dedup across the full set. Rejected rows are deleted from
+    the DB and the Listings sheet is rewritten from scratch (headers preserved).
+    """
+    from .db import all_listings, connect, delete_listings
+    from .dedupe import filter_multi_listing_sellers
+    from .enrich import looks_like_realtor
+    from .sheets import SheetsClient
+
+    with connect() as conn:
+        listings = all_listings(conn)
+    console.print(f"Loaded [bold]{len(listings)}[/bold] listings from DB")
+
+    rejected_realtor: list[tuple] = []
+    after_realtor = []
+    for l in listings:
+        is_r, kw = looks_like_realtor(l.owner_name)
+        if is_r:
+            rejected_realtor.append((l, kw or "unknown"))
+        else:
+            after_realtor.append(l)
+
+    dedup = filter_multi_listing_sellers(after_realtor)
+    kept = dedup.kept
+
+    console.print(f"\n[bold]Re-applied filters[/bold]")
+    console.print(f"  kept:                {len(kept)}")
+    console.print(f"  realtor name match:  {len(rejected_realtor)}")
+    console.print(f"  multi-listing dedup: {len(dedup.rejected)}")
+
+    if rejected_realtor:
+        console.print("\n[yellow]Realtor-name rejections (showing up to 10):[/yellow]")
+        for l, kw in rejected_realtor[:10]:
+            console.print(f"  − {l.listing_id} {l.owner_name!r}  [{kw}]")
+
+    if dedup.rejected:
+        console.print("\n[yellow]Multi-listing rejections (showing up to 10):[/yellow]")
+        for l in dedup.rejected[:10]:
+            key = l.phone or l.email or "?"
+            console.print(f"  − {l.listing_id} {l.owner_name!r}  shared={key}")
+
+    rejected_ids = [l.listing_id for l, _ in rejected_realtor] + [l.listing_id for l in dedup.rejected]
+
+    if dry_run:
+        console.print(f"\n[yellow]Dry run — would delete {len(rejected_ids)} listings.[/yellow]")
+        return
+
+    if not rejected_ids:
+        console.print("\n[green]Nothing to clean.[/green]")
+        return
+
+    with connect() as conn:
+        deleted = delete_listings(conn, rejected_ids)
+    console.print(f"\n[cyan]DB[/cyan] deleted {deleted} rows")
+
+    sheets = SheetsClient()
+    cleared = sheets.clear_listings_data()
+    console.print(f"[cyan]Sheet[/cyan] cleared {cleared} rows, rewriting kept listings...")
+    inserted, updated = sheets.upsert_listings(kept)
+    console.print(f"[cyan]Sheet[/cyan] inserted={inserted} updated={updated}")
+    console.print(f"[cyan]Sheet URL[/cyan] {sheets.workbook_url}")
+
+
 if __name__ == "__main__":
     cli()

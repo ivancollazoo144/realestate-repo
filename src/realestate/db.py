@@ -187,6 +187,59 @@ def log_outreach(
     )
 
 
+def _parse_dt(v: str | None) -> datetime | None:
+    return datetime.fromisoformat(v) if v else None
+
+
+def all_listings(conn: sqlite3.Connection) -> list["Listing"]:
+    cur = conn.execute("SELECT * FROM listings ORDER BY first_seen DESC")
+    return [
+        Listing(
+            listing_id=r["listing_id"],
+            source=r["source"],
+            type=r["type"],
+            price=r["price"],
+            beds=r["beds"],
+            baths=r["baths"],
+            sqft=r["sqft"],
+            lot_sqft=r["lot_sqft"],
+            address=r["address"],
+            city=r["city"],
+            zip_code=r["zip_code"],
+            lat=r["lat"],
+            lng=r["lng"],
+            url=r["url"],
+            scraped_at=_parse_dt(r["scraped_at"]) or datetime.utcnow(),
+            first_seen=_parse_dt(r["first_seen"]) or datetime.utcnow(),
+            listed_at=_parse_dt(r["listed_at"]),
+            owner_name=r["owner_name"],
+            phone=r["phone"],
+            email=r["email"],
+            description=r["description"],
+            outreach_status=r["outreach_status"],
+            last_contacted_at=_parse_dt(r["last_contacted_at"]),
+            notes=r["notes"],
+        )
+        for r in cur.fetchall()
+    ]
+
+
+def delete_listings(conn: sqlite3.Connection, listing_ids: list[str]) -> int:
+    if not listing_ids:
+        return 0
+    placeholders = ",".join("?" for _ in listing_ids)
+    cur = conn.execute(
+        f"DELETE FROM listings WHERE listing_id IN ({placeholders})",
+        listing_ids,
+    )
+    # Also drop their outreach log entries
+    conn.execute(
+        f"DELETE FROM outreach_log WHERE listing_id IN ({placeholders})",
+        listing_ids,
+    )
+    return cur.rowcount
+
+
 def stats(conn: sqlite3.Connection) -> dict[str, int]:
     out: dict[str, int] = {}
     out["total_listings"] = conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0]

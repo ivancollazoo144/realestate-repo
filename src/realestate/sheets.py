@@ -129,3 +129,11 @@ class SheetsClient:
         if rows:
             self.sms_ws.append_rows(rows, value_input_option="USER_ENTERED")
         return len(rows)
+
+    def clear_listings_data(self) -> int:
+        """Delete all data rows in the Listings tab. Headers stay. Returns rows removed."""
+        last = len(self.listings_ws.col_values(1))
+        if last > 1:
+            self.listings_ws.delete_rows(2, last)
+            return last - 1
+        return 0
