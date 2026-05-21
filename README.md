@@ -21,7 +21,34 @@ realestate run --source clasificados  # first source to ship
 
 ## Status
 
-Phase 1 (foundation) in progress. See `PLAN.md` for the roadmap.
+Phases 0–4 shipped. `realestate run --source all` scrapes Clasificados + Zillow + FB Marketplace; current sheet has ~107 leads. See `PLAN.md` for the roadmap.
+
+## Daily scheduled run (macOS launchd)
+
+```bash
+# install
+cp scripts/com.ivan.realestate.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.ivan.realestate.plist
+
+# verify it's registered (should print the label and exit code 0 once it's run)
+launchctl list | grep realestate
+
+# trigger a test run on demand (don't wait until 8am)
+launchctl start com.ivan.realestate
+tail -f logs/realestate.out.log
+
+# disable
+launchctl unload ~/Library/LaunchAgents/com.ivan.realestate.plist
+rm ~/Library/LaunchAgents/com.ivan.realestate.plist
+```
+
+Default schedule: **08:00 PR time, daily**. Edit `Hour`/`Minute` in the plist, then reload (unload + load) to change.
+
+Logs in `logs/`:
+- `realestate.out.log` — stdout (scrape summaries, sheet URLs)
+- `realestate.err.log` — stderr (tracebacks if anything breaks)
+
+If the Mac is asleep at the scheduled time, launchd fires the job when the Mac wakes. If the Mac is off / laptop closed, that day's run is skipped.
 
 ## Hard rules
 

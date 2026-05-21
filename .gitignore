@@ -44,6 +44,8 @@ data/
 debug/
 screenshots/
 *.log
+logs/*
+!logs/.gitkeep
 
 # Testing
 .pytest_cache/
