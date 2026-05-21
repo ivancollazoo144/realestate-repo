@@ -77,13 +77,24 @@ notes
 **Done when:** a hand-crafted fake `Listing` flows through normalize → dedupe → sheet → Gmail draft.
 
 ### Phase 2 — Clasificados Online  *(ship this first)*
-- Two scans: `bienes-raices/venta-de-casas` (sales) and `bienes-raices/alquileres` (rentals)
-- Filter to PR + price thresholds in URL params where possible
-- Phone extraction regex for PR: `(787|939)[-. ]?\d{3}[-. ]?\d{4}`
-- Email regex from description
-- No proxies needed; throttle to ~1 request per 3s, randomize order
 
-**Done when:** Daily run produces a populated sheet with at least 10 real listings and a >70% phone-extraction rate.
+**URL structure discovered 2026-05-20:**
+- Sale index: `/RealEstate.asp` — surfaces ~30 unique FSBO listings via `/UDRealEstateDetail.asp?ID={id}` links. All sampled IDs returned live, rich pages (100–280KB).
+- Rental index: `/Rentals.asp` — `/UDRentalsDetail.asp?ID={id}` links exist (100 of them) but **every sampled ID redirects to the NoAdID placeholder**. Effectively zero live FRBO inventory on Clasificados Online.
+- Broker-only URL pattern: `/PartnersListingREID.asp` (sale) and `/PartnersListingREFRID.asp` (rent) — skip these; we want owner-direct only.
+- Encoding: iso-8859-1 (force on httpx response).
+
+**Scope adjustment:** Phase 2 ships **sales only** from Clasificados. FRBO will come from Zillow Rentals + FB Marketplace in Phases 3 and 4. Plan-locked filter list adjusted accordingly.
+
+**Sale scrape implementation:**
+- Scrape `/RealEstate.asp`, extract all unique `/UDRealEstateDetail.asp?ID=` links (~30 unique).
+- Fetch each detail page, throttled ~1 req/3s, randomized order.
+- Detail page fields: title, type (Casa/Apartamento/Finca/Terreno), city, region (e.g. "Carolina - Isla Verde"), beds (`Cuartos`), baths (`Baños`), price (`$X,XXX`), sqft (`X p/c -ft2`), subdivision (`Urbanizacion - ...`), seller name, seller phone (`(xxx) xxx-xxxx`).
+- FSBO filter: reject seller-name strings containing `Realty`, `Real Estate`, `Realtor`, `Lic#`, `Corredor`, `LLC`, `Inc`, `.com`, `Group`. Sample showed 2/3 of UD listings are actually brokers using the owner-direct URL.
+- Phone extraction regex: `(\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4})` — handle PR (787/939) and US (305 etc.) formats; seller may live off-island.
+- Email regex from description.
+
+**Done when:** Daily run produces a populated sheet with at least 10 real FSBO sale listings (post-broker-filter) and a >70% phone-extraction rate.
 
 ### Phase 3 — Zillow PR
 - Playwright with `firefox` channel + residential proxy session per run

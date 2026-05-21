@@ -37,11 +37,77 @@ def init_db_cmd() -> None:
     help="Which source to scrape. 'all' runs every source.",
 )
 @click.option("--dry-run", is_flag=True, help="Scrape and normalize, but do not write to sheet or draft outreach.")
-def run_cmd(source: str, dry_run: bool) -> None:
+@click.option("--max", "max_listings", type=int, default=None, help="Cap listings fetched (useful for testing).")
+def run_cmd(source: str, dry_run: bool, max_listings: int | None) -> None:
     """Scrape one or all sources and push new listings through the pipeline."""
-    console.print(f"[bold]Run[/bold] source={source} dry_run={dry_run}")
-    console.print("[yellow]Scraper sources are not implemented yet — Phase 2 onward.[/yellow]")
-    # TODO Phase 2+: dispatch to source scrapers, normalize, dedupe, upsert, sync sheet, draft outreach.
+    from collections import Counter
+
+    from .db import connect, init_db, upsert_listing
+    from .normalize import normalize_clasificados
+    from .sheets import SheetsClient
+    from .sources.clasificados import ClasificadosScraper
+
+    init_db()
+
+    if source not in ("clasificados", "all"):
+        console.print(f"[yellow]Source {source!r} not implemented yet — only 'clasificados' for now.[/yellow]")
+        return
+
+    console.print(f"[bold]Running clasificados scraper[/bold] dry_run={dry_run} max={max_listings}")
+
+    accepted_listings: list = []
+    rejection_reasons: Counter = Counter()
+    rejection_examples: dict[str, str] = {}
+
+    with ClasificadosScraper(max_listings=max_listings) as scraper:
+        raws = scraper.fetch_index()
+        console.print(f"  index: {len(raws)} unique listings")
+
+        for i, raw in enumerate(raws, 1):
+            try:
+                detail = scraper.fetch_detail(raw)
+            except Exception as e:
+                rejection_reasons["fetch_error"] += 1
+                console.print(f"  [red]fetch error[/red] {raw.native_id}: {e}")
+                continue
+
+            result = normalize_clasificados(detail)
+            if result.rejected:
+                bucket = (result.reason or "unknown").split(":", 1)[0]
+                rejection_reasons[bucket] += 1
+                if bucket not in rejection_examples and result.reason:
+                    rejection_examples[bucket] = result.reason
+                continue
+
+            assert result.listing is not None
+            accepted_listings.append(result.listing)
+            console.print(
+                f"  [green]✓[/green] {raw.native_id} "
+                f"${result.listing.price or 0:,} {result.listing.address!r} "
+                f"({result.listing.owner_name}, {result.listing.phone or 'no phone'})"
+            )
+
+    console.print(f"\n[bold]Scrape summary:[/bold] accepted={len(accepted_listings)} fetched={len(raws)}")
+    for bucket, n in rejection_reasons.most_common():
+        ex = rejection_examples.get(bucket, "")
+        console.print(f"  rejected {bucket}: {n}" + (f"  e.g. {ex[:60]}" if ex else ""))
+
+    if dry_run:
+        console.print("[yellow]Dry run — skipping DB and Sheets writes.[/yellow]")
+        return
+
+    if not accepted_listings:
+        console.print("[yellow]Nothing to write.[/yellow]")
+        return
+
+    with connect() as conn:
+        new_count = sum(1 for l in accepted_listings if upsert_listing(conn, l))
+    console.print(f"[cyan]DB[/cyan] upserted {len(accepted_listings)} ({new_count} new)")
+
+    sheets = SheetsClient()
+    inserted, updated = sheets.upsert_listings(accepted_listings)
+    console.print(f"[cyan]Sheet[/cyan] inserted={inserted} updated={updated}")
+    console.print(f"[cyan]Sheet URL[/cyan] {sheets.workbook_url}")
 
 
 @cli.command("stats")
