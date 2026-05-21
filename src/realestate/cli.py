@@ -4,9 +4,12 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from datetime import datetime
+
 from . import __version__
 from .config import CONFIG
 from .db import connect, init_db, stats
+from .sources.base import Listing
 
 console = Console()
 
@@ -75,6 +78,159 @@ def config_cmd() -> None:
     for k, v in redacted.items():
         table.add_row(k, str(v))
     console.print(table)
+
+
+@cli.command("e2e-test")
+def e2e_test_cmd() -> None:
+    """End-to-end smoke test: DB upsert → dedup check → Sheet upsert → Gmail draft → SMS row.
+
+    Proves the Phase 1 foundation works before any real scraping. Idempotent.
+    Set ENABLE_GMAIL_DRAFTS=true in .env to actually create the Gmail draft;
+    otherwise the draft step is skipped with a log line.
+    """
+    from .db import connect, init_db, log_outreach, recent_contact_exists, upsert_listing
+    from .gmail_draft import create_gmail_draft
+    from .google_auth import get_credentials
+    from .sheets import SheetsClient
+
+    init_db()
+
+    now = datetime.utcnow()
+    fake = Listing(
+        listing_id="test:e2e-1",
+        source="clasificados",  # type: ignore[arg-type]
+        type="sale",
+        price=210_000,
+        beds=3,
+        baths=2,
+        sqft=1600,
+        lot_sqft=4000,
+        address="42 Calle Falsa",
+        city="Bayamón",
+        zip_code="00956",
+        lat=None,
+        lng=None,
+        url="https://example.invalid/listing/e2e-1",
+        scraped_at=now,
+        first_seen=now,
+        listed_at=None,
+        owner_name="Juan Owner",
+        phone="787-555-0142",
+        email=CONFIG.outreach_gmail_address or "owner@example.invalid",
+        description="E2E test listing — proves DB → Sheet → Gmail draft pipeline.",
+    )
+
+    # 1) DB upsert + dedup check
+    with connect() as conn:
+        is_new = upsert_listing(conn, fake)
+        cooldown_hit_before = recent_contact_exists(
+            conn, fake.email or "", CONFIG.outreach_cooldown_days
+        )
+    console.print(f"[cyan]DB[/cyan] inserted_as_new={is_new} cooldown_hit_before={cooldown_hit_before}")
+
+    # 2) Sheet upsert
+    sheets = SheetsClient()
+    inserted, updated = sheets.upsert_listings([fake])
+    console.print(f"[cyan]Sheet[/cyan] inserted={inserted} updated={updated}")
+    console.print(f"[cyan]Sheet URL[/cyan] {sheets.workbook_url}")
+
+    # 3) Outreach: render templates inline (Phase 5 will replace with proper modules)
+    subject = f"Interés en su propiedad — {fake.address}, {fake.city}"
+    body = (
+        f"Hola,\n\n"
+        f"Vi su anuncio en {fake.source} ({fake.url}) y me interesa conocer más "
+        f"sobre la propiedad en {fake.address}, {fake.city}. ¿Sigue disponible? "
+        f"Me gustaría coordinar una visita.\n\n"
+        f"Gracias,\nIvan\n\n"
+        f"(Si prefiere que no le escriba más, conteste con STOP y no le contactaré de nuevo.)"
+    )
+    sms_body = (
+        f"Hola, vi su anuncio en {fake.city}. ¿Sigue disponible? — Ivan. (STOP para no recibir más.)"
+    )
+
+    if cooldown_hit_before:
+        console.print("[yellow]Skipping outreach — contact in cooldown window.[/yellow]")
+    else:
+        # Email draft (only actually create if enabled)
+        if CONFIG.enable_gmail_drafts:
+            creds = get_credentials()
+            draft_id = create_gmail_draft(creds, fake.email or "", subject, body)
+            console.print(f"[green]Gmail draft created[/green] id={draft_id}")
+        else:
+            console.print(
+                "[yellow]ENABLE_GMAIL_DRAFTS=false — skipping actual Gmail draft creation. "
+                "Set it to true in .env to test the draft step.[/yellow]"
+            )
+
+        # SMS draft row
+        sheets.append_sms_drafts([{
+            "listing_id": fake.listing_id,
+            "phone": fake.phone,
+            "message": sms_body,
+            "listing_url": fake.url,
+            "drafted_at": now.isoformat(),
+            "status": "drafted",
+        }])
+        console.print("[green]SMS draft appended[/green] to sheet")
+
+        # Log to DB so cooldown engages on rerun
+        with connect() as conn:
+            log_outreach(conn, fake.listing_id, "email", fake.email or "", "e2e_template_es", body)
+            log_outreach(conn, fake.listing_id, "sms", fake.phone or "", "e2e_sms_es", sms_body)
+
+    with connect() as conn:
+        cooldown_hit_after = recent_contact_exists(
+            conn, fake.email or "", CONFIG.outreach_cooldown_days
+        )
+    console.print(f"[cyan]Cooldown engaged after run[/cyan] {cooldown_hit_after}")
+    console.print("[bold green]E2E test complete.[/bold green]")
+
+
+@cli.command("sheet-test")
+def sheet_test_cmd() -> None:
+    """Authenticate with Google and write one fake listing to the workbook.
+
+    First run opens a browser window for OAuth consent. After auth, creates the
+    workbook (if missing) and appends a single fake listing. Idempotent — running
+    it again updates the same row instead of duplicating.
+    """
+    from .sheets import SheetsClient
+
+    console.print("[bold]Initializing Sheets client…[/bold]")
+    console.print(
+        "[yellow]If this is the first run, a browser window will open asking you to "
+        f"sign in as {CONFIG.outreach_gmail_address or 'the dedicated Gmail'} and "
+        "authorize the app.[/yellow]"
+    )
+    client = SheetsClient()
+    console.print(f"[green]Workbook ready:[/green] {client.workbook_url}")
+
+    now = datetime.utcnow()
+    fake = Listing(
+        listing_id="test:smoke-1",
+        source="clasificados",  # type: ignore[arg-type]
+        type="sale",
+        price=185_000,
+        beds=3,
+        baths=2,
+        sqft=1450,
+        lot_sqft=None,
+        address="123 Fake St",
+        city="San Juan",
+        zip_code="00907",
+        lat=None,
+        lng=None,
+        url="https://example.invalid/listing/smoke-1",
+        scraped_at=now,
+        first_seen=now,
+        listed_at=None,
+        owner_name="Smoke Test Owner",
+        phone="787-555-0100",
+        email="smoke@example.invalid",
+        description="Fake listing used by sheet-test to verify the pipeline end to end.",
+    )
+    inserted, updated = client.upsert_listings([fake])
+    console.print(f"[green]Done.[/green] inserted={inserted} updated={updated}")
 
 
 if __name__ == "__main__":
