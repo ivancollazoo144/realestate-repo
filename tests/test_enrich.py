@@ -80,3 +80,20 @@ def test_looks_like_realtor_other_big_brokerages():
     assert looks_like_realtor("Coldwell Banker")[0] is True
     assert looks_like_realtor("eXp Realty PR")[0] is True
     assert looks_like_realtor("Compass Real Estate")[0] is True
+
+
+def test_looks_like_realtor_property_management():
+    """Property managers aren't the owner — should be rejected too."""
+    assert looks_like_realtor("Caribe Property Management")[0] is True  # via 'property'
+    is_r, kw = looks_like_realtor("ABC Management")
+    assert is_r is True
+    assert kw == "management"
+    is_r, kw = looks_like_realtor("Tropical Rentals")
+    assert is_r is True
+    assert kw == "rentals"
+    is_r, kw = looks_like_realtor("Smith Manager")
+    assert is_r is True
+    assert kw == "manager"
+    is_r, kw = looks_like_realtor("Casa Administrador")
+    assert is_r is True
+    assert kw == "administrador"

@@ -27,6 +27,8 @@ REALTOR_KEYWORDS = (
     "corredor", "broker", "agent", "agencia",
     "llc", "inc", "corp", "group", ".com",
     "homes 4 sale", "property", "properties",
+    # Property management — owner is not the seller
+    "management", "manager", "administrador", "administracion", "rentals",
     # Major brokerages that may not include "realty" in their displayed name
     "keller williams", "remax", "re/max", "century 21", "coldwell",
     "exp realty", "exp ", "berkshire hathaway", "sotheby",
