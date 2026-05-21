@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Env vars and secrets
+.env
+.env.local
+credentials.json
+token.json
+storage_state.json
+service_account*.json
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Debug artifacts
+debug/
+screenshots/
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Playwright
+test-results/
+playwright-report/
