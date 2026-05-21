@@ -43,51 +43,71 @@ def run_cmd(source: str, dry_run: bool, max_listings: int | None) -> None:
     from collections import Counter
 
     from .db import connect, init_db, upsert_listing
-    from .normalize import normalize_clasificados
+    from .normalize import normalize_clasificados, normalize_zillow
     from .sheets import SheetsClient
+    from .sources.base import RawListing
     from .sources.clasificados import ClasificadosScraper
+    from .sources.zillow import ZillowScraper
 
     init_db()
 
-    if source not in ("clasificados", "all"):
-        console.print(f"[yellow]Source {source!r} not implemented yet — only 'clasificados' for now.[/yellow]")
+    sources_to_run: list[str] = []
+    if source == "all":
+        sources_to_run = ["clasificados", "zillow"]
+    elif source in ("clasificados", "zillow"):
+        sources_to_run = [source]
+    else:
+        console.print(f"[yellow]Source {source!r} not implemented yet.[/yellow]")
         return
-
-    console.print(f"[bold]Running clasificados scraper[/bold] dry_run={dry_run} max={max_listings}")
 
     accepted_listings: list = []
     rejection_reasons: Counter = Counter()
     rejection_examples: dict[str, str] = {}
 
-    with ClasificadosScraper(max_listings=max_listings) as scraper:
-        raws = scraper.fetch_index()
-        console.print(f"  index: {len(raws)} unique listings")
+    for src in sources_to_run:
+        console.print(f"\n[bold]Running {src} scraper[/bold] dry_run={dry_run} max={max_listings}")
+        if src == "clasificados":
+            ctx = ClasificadosScraper(max_listings=max_listings)
+            normalizer = normalize_clasificados
+            needs_detail = True
+        else:  # zillow
+            ctx = ZillowScraper()
+            normalizer = normalize_zillow
+            needs_detail = False
 
-        for i, raw in enumerate(raws, 1):
-            try:
-                detail = scraper.fetch_detail(raw)
-            except Exception as e:
-                rejection_reasons["fetch_error"] += 1
-                console.print(f"  [red]fetch error[/red] {raw.native_id}: {e}")
-                continue
+        with ctx as scraper:
+            raws = scraper.fetch_index()
+            if max_listings is not None and src == "zillow":
+                raws = raws[:max_listings]
+            console.print(f"  index: {len(raws)} unique listings")
 
-            result = normalize_clasificados(detail)
-            if result.rejected:
-                bucket = (result.reason or "unknown").split(":", 1)[0]
-                rejection_reasons[bucket] += 1
-                if bucket not in rejection_examples and result.reason:
-                    rejection_examples[bucket] = result.reason
-                continue
+            for raw in raws:
+                if needs_detail:
+                    try:
+                        raw = scraper.fetch_detail(raw)
+                    except Exception as e:
+                        rejection_reasons[f"{src}:fetch_error"] += 1
+                        console.print(f"  [red]fetch error[/red] {raw.native_id}: {e}")
+                        continue
 
-            assert result.listing is not None
-            accepted_listings.append(result.listing)
-            console.print(
-                f"  [green]✓[/green] {raw.native_id} "
-                f"${result.listing.price or 0:,} {result.listing.address!r} "
-                f"({result.listing.owner_name}, {result.listing.phone or 'no phone'})"
-            )
+                result = normalizer(raw)
+                if result.rejected:
+                    bucket = f"{src}:" + (result.reason or "unknown").split(":", 1)[0]
+                    rejection_reasons[bucket] += 1
+                    if bucket not in rejection_examples and result.reason:
+                        rejection_examples[bucket] = result.reason
+                    continue
 
-    console.print(f"\n[bold]Scrape summary:[/bold] accepted={len(accepted_listings)} fetched={len(raws)}")
+                assert result.listing is not None
+                accepted_listings.append(result.listing)
+                console.print(
+                    f"  [green]✓[/green] [{src}] {raw.native_id} "
+                    f"${result.listing.price or 0:,} "
+                    f"{(result.listing.address or '')!r} in {result.listing.city or '?'} "
+                    f"({result.listing.owner_name or 'no name'}, {result.listing.phone or 'no phone'})"
+                )
+
+    console.print(f"\n[bold]Scrape summary:[/bold] accepted={len(accepted_listings)}")
     for bucket, n in rejection_reasons.most_common():
         ex = rejection_examples.get(bucket, "")
         console.print(f"  rejected {bucket}: {n}" + (f"  e.g. {ex[:60]}" if ex else ""))

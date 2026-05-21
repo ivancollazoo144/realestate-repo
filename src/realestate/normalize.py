@@ -6,6 +6,8 @@ from datetime import datetime
 
 from selectolax.parser import HTMLParser
 
+from typing import Any
+
 from .config import CONFIG
 from .enrich import extract_emails, extract_phones, looks_like_realtor
 from .sources.base import Listing, RawListing
@@ -221,5 +223,104 @@ def normalize_clasificados(raw: RawListing) -> ParseResult:
         outreach_status="none",
         last_contacted_at=None,
         notes=None if not prop_type else f"type={prop_type}",
+    )
+    return ParseResult(listing=listing)
+
+
+PR_ADDRESS_RE = re.compile(r",\s*([^,]+),\s*PR\s*(\d{5})?\s*$", re.IGNORECASE)
+
+
+def _parse_pr_address(address: str) -> tuple[str | None, str | None, str | None]:
+    """Split 'Carr 103 Camino, Cabo Rojo, PR 00623' into (street, city, zip)."""
+    if not address:
+        return None, None, None
+    m = PR_ADDRESS_RE.search(address)
+    if m:
+        city = m.group(1).strip()
+        zip_code = m.group(2)
+        street = address[: m.start()].strip().rstrip(",")
+        return street or None, city or None, zip_code
+    # Fallback: split on commas
+    parts = [p.strip() for p in address.split(",") if p.strip()]
+    if len(parts) >= 2:
+        return parts[0], parts[1], None
+    return address, None, None
+
+
+def normalize_zillow(raw: RawListing) -> ParseResult:
+    """Parse a Zillow RapidAPI search-result item into a Listing.
+
+    FSBO/FRBO filter: brokerage field empty == owner-listed. Anything else is a
+    brokerage we want to skip.
+    """
+    data: dict[str, Any] | None = raw.raw_json
+    if not data:
+        return ParseResult(listing=None, rejected=True, reason="no_data")
+
+    brokerage = (data.get("brokerage") or "").strip()
+    if brokerage:
+        return ParseResult(
+            listing=None,
+            rejected=True,
+            reason=f"brokered_by:{brokerage[:60]}",
+            seller_name=brokerage,
+        )
+
+    list_type = data.get("_list_type", "for-sale")
+    listing_type = "rent" if list_type == "for-rent" else "sale"
+
+    price = None
+    raw_price = data.get("price")
+    if raw_price is not None:
+        try:
+            price = int(float(raw_price))
+        except (TypeError, ValueError):
+            pass
+
+    threshold = CONFIG.min_rent_price if listing_type == "rent" else CONFIG.min_sale_price
+    if price is not None and price < threshold:
+        return ParseResult(
+            listing=None,
+            rejected=True,
+            reason=f"below_min_price:${price:,}",
+        )
+
+    street, city, zip_code = _parse_pr_address(data.get("address", ""))
+
+    def _num(key: str, cast: type) -> float | int | None:
+        v = data.get(key)
+        if v is None:
+            return None
+        try:
+            return cast(v)
+        except (TypeError, ValueError):
+            return None
+
+    now = raw.fetched_at or datetime.utcnow()
+    listing = Listing(
+        listing_id=Listing.make_id(raw.source, raw.native_id),
+        source=raw.source,
+        type=listing_type,  # type: ignore[arg-type]
+        price=price,
+        beds=_num("beds", float),
+        baths=_num("baths", float),
+        sqft=_num("sqft", int),
+        lot_sqft=None,
+        address=street,
+        city=city,
+        zip_code=zip_code,
+        lat=_num("latitude", float),
+        lng=_num("longitude", float),
+        url=raw.url,
+        scraped_at=now,
+        first_seen=now,
+        listed_at=None,
+        owner_name=None,  # Zillow API does not expose owner contact
+        phone=None,
+        email=None,
+        description=None,
+        outreach_status="none",
+        last_contacted_at=None,
+        notes=f"property_type={data.get('property_type')}" if data.get("property_type") else None,
     )
     return ParseResult(listing=listing)

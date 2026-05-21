@@ -27,7 +27,8 @@ env/
 
 # Env vars and secrets
 .env
-.env.local
+.env.*
+!.env.example
 credentials.json
 token.json
 storage_state.json

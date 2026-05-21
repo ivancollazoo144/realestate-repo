@@ -43,6 +43,7 @@ class Config:
     min_rent_price: int
 
     zillow_proxy_url: str | None
+    rapidapi_key: str | None
     fb_storage_state_path: Path
 
     outreach_cooldown_days: int
@@ -54,6 +55,7 @@ class Config:
         municipios = tuple(m.strip() for m in municipios_raw.split(",") if m.strip())
 
         proxy = os.getenv("ZILLOW_PROXY_URL", "").strip() or None
+        rapidapi_key = os.getenv("RAPIDAPI_KEY", "").strip() or None
 
         return cls(
             google_credentials_path=_path("GOOGLE_CREDENTIALS_PATH", "./credentials.json"),
@@ -67,6 +69,7 @@ class Config:
             min_sale_price=_int("MIN_SALE_PRICE", 150_000),
             min_rent_price=_int("MIN_RENT_PRICE", 1_500),
             zillow_proxy_url=proxy,
+            rapidapi_key=rapidapi_key,
             fb_storage_state_path=_path("FB_STORAGE_STATE_PATH", "./storage_state.json"),
             outreach_cooldown_days=_int("OUTREACH_COOLDOWN_DAYS", 14),
             enable_gmail_drafts=_bool("ENABLE_GMAIL_DRAFTS", False),
