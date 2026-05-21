@@ -383,22 +383,22 @@ def clean_cmd(dry_run: bool) -> None:
     rejected_ids = [l.listing_id for l, _ in rejected_realtor] + [l.listing_id for l in dedup.rejected]
 
     if dry_run:
-        console.print(f"\n[yellow]Dry run — would delete {len(rejected_ids)} listings.[/yellow]")
+        console.print(f"\n[yellow]Dry run — would delete {len(rejected_ids)} from DB, then rebuild sheet to match.[/yellow]")
         return
 
-    if not rejected_ids:
-        console.print("\n[green]Nothing to clean.[/green]")
-        return
+    if rejected_ids:
+        with connect() as conn:
+            deleted = delete_listings(conn, rejected_ids)
+        console.print(f"\n[cyan]DB[/cyan] deleted {deleted} rows")
+    else:
+        console.print(f"\n[cyan]DB[/cyan] no listings to remove")
 
-    with connect() as conn:
-        deleted = delete_listings(conn, rejected_ids)
-    console.print(f"\n[cyan]DB[/cyan] deleted {deleted} rows")
-
+    # Always rebuild the sheet to match the DB, so any stale rows in the sheet
+    # (rows present in sheet but absent from DB) get dropped.
     sheets = SheetsClient()
     cleared = sheets.clear_listings_data()
-    console.print(f"[cyan]Sheet[/cyan] cleared {cleared} rows, rewriting kept listings...")
     inserted, updated = sheets.upsert_listings(kept)
-    console.print(f"[cyan]Sheet[/cyan] inserted={inserted} updated={updated}")
+    console.print(f"[cyan]Sheet[/cyan] cleared {cleared} rows, wrote {inserted}")
     console.print(f"[cyan]Sheet URL[/cyan] {sheets.workbook_url}")
 
 
