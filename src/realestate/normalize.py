@@ -321,6 +321,19 @@ def normalize_zillow(raw: RawListing) -> ParseResult:
         description=None,
         outreach_status="none",
         last_contacted_at=None,
-        notes=f"property_type={data.get('property_type')}" if data.get("property_type") else None,
+        notes=_zillow_notes(data),
     )
     return ParseResult(listing=listing)
+
+
+def _zillow_notes(data: dict[str, Any]) -> str:
+    """Zillow's /bylocation 'brokerage' field is unreliable -- a property listed
+    by a real broker on the live page often returns empty brokerage in the
+    search response. Flag every Zillow row for manual verification so the user
+    checks the 'Listed by:' field on the Zillow page before reaching out.
+    """
+    parts = ["⚠ VERIFY listed-by on Zillow page before contact"]
+    pt = data.get("property_type")
+    if pt:
+        parts.append(f"property_type={pt}")
+    return " | ".join(parts)
