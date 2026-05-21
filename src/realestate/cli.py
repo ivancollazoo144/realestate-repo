@@ -112,6 +112,20 @@ def run_cmd(source: str, dry_run: bool, max_listings: int | None) -> None:
         ex = rejection_examples.get(bucket, "")
         console.print(f"  rejected {bucket}: {n}" + (f"  e.g. {ex[:60]}" if ex else ""))
 
+    # Post-scrape dedup: reject sellers whose phone/email shows up on >1 listing
+    from .dedupe import filter_multi_listing_sellers
+    dedup = filter_multi_listing_sellers(accepted_listings)
+    if dedup.rejected:
+        console.print(
+            f"\n[yellow]Multi-listing dedup:[/yellow] rejected {len(dedup.rejected)} listings "
+            f"({len(dedup.rejected_phones)} phones, {len(dedup.rejected_emails)} emails)"
+        )
+        for l in dedup.rejected[:5]:
+            console.print(f"  − {l.listing_id} {l.owner_name!r} {l.phone or l.email}")
+        if len(dedup.rejected) > 5:
+            console.print(f"  ... and {len(dedup.rejected) - 5} more")
+    accepted_listings = dedup.kept
+
     if dry_run:
         console.print("[yellow]Dry run — skipping DB and Sheets writes.[/yellow]")
         return

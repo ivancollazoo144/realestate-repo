@@ -60,3 +60,23 @@ def test_looks_like_realtor_pr_license():
     is_r, kw = looks_like_realtor("Maria Rodriguez E-12345")
     assert is_r is True
     assert kw == "license:E-12345"
+
+
+def test_looks_like_realtor_keller_williams():
+    assert looks_like_realtor("Keller Williams Realty PR")[0] is True
+    is_r, kw = looks_like_realtor("KW Boricua")
+    assert is_r is True
+    assert kw == "abbrev:KW"
+    is_r, kw = looks_like_realtor("Maria KW")  # standalone KW
+    assert is_r is True
+    # Should NOT trigger on names containing 'kw' as substring (e.g. 'Skowron')
+    assert looks_like_realtor("Skowron")[0] is False
+
+
+def test_looks_like_realtor_other_big_brokerages():
+    assert looks_like_realtor("ReMax Premier")[0] is True
+    assert looks_like_realtor("RE/MAX Caribe")[0] is True
+    assert looks_like_realtor("Century 21 Top")[0] is True
+    assert looks_like_realtor("Coldwell Banker")[0] is True
+    assert looks_like_realtor("eXp Realty PR")[0] is True
+    assert looks_like_realtor("Compass Real Estate")[0] is True

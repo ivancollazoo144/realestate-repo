@@ -27,10 +27,17 @@ REALTOR_KEYWORDS = (
     "corredor", "broker", "agent", "agencia",
     "llc", "inc", "corp", "group", ".com",
     "homes 4 sale", "property", "properties",
+    # Major brokerages that may not include "realty" in their displayed name
+    "keller williams", "remax", "re/max", "century 21", "coldwell",
+    "exp realty", "exp ", "berkshire hathaway", "sotheby",
+    "compass ", "douglas elliman",
 )
 
 # PR realtor license numbers look like "L-1234" or "E-1234" (commercial)
 REALTOR_LICENSE_RE = re.compile(r"\b[LE]-\d{3,6}\b")
+
+# Standalone broker abbreviations as separate words (e.g. "KW Boricua")
+BROKER_ABBREV_RE = re.compile(r"\b(KW|RE/MAX|C21)\b", re.IGNORECASE)
 
 
 def canonicalize_phone(area: str, prefix: str, line: str) -> str:
@@ -77,4 +84,7 @@ def looks_like_realtor(seller_name: str | None) -> tuple[bool, str | None]:
     m = REALTOR_LICENSE_RE.search(seller_name)
     if m:
         return True, f"license:{m.group(0)}"
+    m2 = BROKER_ABBREV_RE.search(seller_name)
+    if m2:
+        return True, f"abbrev:{m2.group(0).upper()}"
     return False, None
