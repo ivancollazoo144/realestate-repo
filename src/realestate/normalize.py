@@ -326,6 +326,79 @@ def normalize_zillow(raw: RawListing) -> ParseResult:
     return ParseResult(listing=listing)
 
 
+def normalize_facebook(raw: RawListing) -> ParseResult:
+    """Parse an FB Marketplace index-card RawListing into a Listing.
+
+    Index-only scrape: title from the card text, price already extracted,
+    city from the search slug we hit, listing_type derived from the URL path.
+    FB anonymously hides owner contact info and has no Listed-by field, so
+    we stamp the same verify-before-contact warning we use for Zillow.
+    """
+    data: dict[str, Any] | None = raw.raw_json
+    if not data:
+        return ParseResult(listing=None, rejected=True, reason="no_data")
+
+    listing_type = data.get("_listing_type") or "sale"
+    price: int | None = data.get("_index_price")
+    threshold = CONFIG.min_rent_price if listing_type == "rent" else CONFIG.min_sale_price
+    if price is None or price < threshold:
+        return ParseResult(
+            listing=None,
+            rejected=True,
+            reason=f"below_min_price:${price or 0:,}",
+        )
+
+    text = (data.get("_index_text") or "").strip()
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    # FB card text is typically: "$X,XXX\nTitle\nCity, PR" — second line is the title.
+    title = None
+    for l in lines:
+        if not l.startswith("$") and not re.match(r"^[\d,]+$", l):
+            title = l
+            break
+
+    city = data.get("_city")
+
+    # Belt-and-suspenders broker filter on the visible card text. If the
+    # poster put their realty/LLC/Lic# in the card itself, drop the listing.
+    seller_marker, kw = looks_like_realtor(text)
+    if seller_marker:
+        return ParseResult(
+            listing=None,
+            rejected=True,
+            reason=f"realtor_keyword:{kw}",
+        )
+
+    now = raw.fetched_at or datetime.utcnow()
+    listing = Listing(
+        listing_id=Listing.make_id(raw.source, raw.native_id),
+        source=raw.source,
+        type=listing_type,  # type: ignore[arg-type]
+        price=price,
+        beds=None,
+        baths=None,
+        sqft=None,
+        lot_sqft=None,
+        address=title,
+        city=city,
+        zip_code=None,
+        lat=None,
+        lng=None,
+        url=raw.url,
+        scraped_at=now,
+        first_seen=now,
+        listed_at=None,
+        owner_name=None,
+        phone=None,
+        email=None,
+        description=None,
+        outreach_status="none",
+        last_contacted_at=None,
+        notes="⚠ VERIFY seller is owner on FB page (login to message)",
+    )
+    return ParseResult(listing=listing)
+
+
 def _zillow_notes(data: dict[str, Any]) -> str:
     """Zillow's /bylocation 'brokerage' field is unreliable -- a property listed
     by a real broker on the live page often returns empty brokerage in the

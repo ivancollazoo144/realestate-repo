@@ -43,18 +43,19 @@ def run_cmd(source: str, dry_run: bool, max_listings: int | None) -> None:
     from collections import Counter
 
     from .db import connect, init_db, upsert_listing
-    from .normalize import normalize_clasificados, normalize_zillow
+    from .normalize import normalize_clasificados, normalize_facebook, normalize_zillow
     from .sheets import SheetsClient
     from .sources.base import RawListing
     from .sources.clasificados import ClasificadosScraper
+    from .sources.facebook import FacebookScraper
     from .sources.zillow import ZillowScraper
 
     init_db()
 
     sources_to_run: list[str] = []
     if source == "all":
-        sources_to_run = ["clasificados", "zillow"]
-    elif source in ("clasificados", "zillow"):
+        sources_to_run = ["clasificados", "zillow", "facebook"]
+    elif source in ("clasificados", "zillow", "facebook"):
         sources_to_run = [source]
     else:
         console.print(f"[yellow]Source {source!r} not implemented yet.[/yellow]")
@@ -70,6 +71,10 @@ def run_cmd(source: str, dry_run: bool, max_listings: int | None) -> None:
             ctx = ClasificadosScraper(max_listings=max_listings)
             normalizer = normalize_clasificados
             needs_detail = True
+        elif src == "facebook":
+            ctx = FacebookScraper()
+            normalizer = normalize_facebook
+            needs_detail = False
         else:  # zillow
             ctx = ZillowScraper()
             normalizer = normalize_zillow
@@ -77,7 +82,7 @@ def run_cmd(source: str, dry_run: bool, max_listings: int | None) -> None:
 
         with ctx as scraper:
             raws = scraper.fetch_index()
-            if max_listings is not None and src == "zillow":
+            if max_listings is not None and src in ("zillow", "facebook"):
                 raws = raws[:max_listings]
             console.print(f"  index: {len(raws)} unique listings")
 
