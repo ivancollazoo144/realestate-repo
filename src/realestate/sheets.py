@@ -144,10 +144,10 @@ class SheetsClient:
         - Existing listings (matched by listing_id in column A) get their data
           updated in place via batch_update. Cell formatting (colors, bold,
           highlights, manual annotations in other columns) is preserved.
-        - New listings get inserted at the top of the sheet under a divider
+        - New listings are APPENDED to the bottom of the sheet under a divider
           for today's date. If today's divider already exists from an earlier
-          run, new rows are inserted just below it. Pre-existing day groups
-          and their listings stay put.
+          run, new rows are appended after the existing today group. This
+          keeps the sheet ordered oldest → newest, top → bottom.
 
         Returns (inserted, updated).
         """
@@ -157,14 +157,14 @@ class SheetsClient:
 
         col_a = self.listings_ws.col_values(1)
 
-        today_divider_row: int | None = None
+        today_divider_exists = False
         existing_rows: dict[str, int] = {}
         for i, val in enumerate(col_a[1:], start=2):
             if not val:
                 continue
             if val.startswith("═══"):
-                if val.startswith(today_divider_prefix) and today_divider_row is None:
-                    today_divider_row = i
+                if val.startswith(today_divider_prefix):
+                    today_divider_exists = True
                 continue
             existing_rows[val] = i
 
@@ -189,22 +189,67 @@ class SheetsClient:
             self.listings_ws.batch_update(update_batches, value_input_option="USER_ENTERED")
 
         if new_rows:
-            if today_divider_row is None:
+            rows_to_append: list[list[str]] = []
+            if not today_divider_exists:
                 divider_text = f"═══  {today_str}  ═══"
-                divider = [divider_text] + [""] * (len(LISTING_HEADERS) - 1)
-                self.listings_ws.insert_rows(
-                    [divider, *new_rows],
-                    row=2,
-                    value_input_option="USER_ENTERED",
-                )
-            else:
-                self.listings_ws.insert_rows(
-                    new_rows,
-                    row=today_divider_row + 1,
-                    value_input_option="USER_ENTERED",
-                )
+                rows_to_append.append([divider_text] + [""] * (len(LISTING_HEADERS) - 1))
+            rows_to_append.extend(new_rows)
+            self.listings_ws.append_rows(rows_to_append, value_input_option="USER_ENTERED")
 
         return inserted, updated
+
+    def reorganize_oldest_first(self) -> tuple[int, int]:
+        """Sort the Listings tab by first_seen ASC and rebuild day dividers.
+
+        Uses Google Sheets' native sortRange, which preserves cell formatting
+        on listing rows (highlights, colors, manual annotations all ride
+        along with their rows). Existing divider rows are deleted before the
+        sort and re-created in the correct positions after.
+
+        Returns (date_groups, listing_rows_sorted).
+        """
+        last_col = _col_letter(len(LISTING_HEADERS))
+
+        # 1. Drop existing dividers (delete bottom-up so row numbers stay stable)
+        col_a = self.listings_ws.col_values(1)
+        divider_rows = [i + 1 for i, v in enumerate(col_a) if v.startswith("═══")]
+        for row_num in sorted(divider_rows, reverse=True):
+            self.listings_ws.delete_rows(row_num)
+
+        # 2. Native sort by first_seen ascending (formatting preserved by Sheets)
+        first_seen_col = LISTING_HEADERS.index("first_seen") + 1
+        post_delete_last_row = len(self.listings_ws.col_values(1))
+        if post_delete_last_row > 1:
+            self.listings_ws.sort(
+                (first_seen_col, "asc"),
+                range=f"A2:{last_col}{post_delete_last_row}",
+            )
+
+        # 3. Walk the sorted first_seen column to find date transitions
+        fs_vals = self.listings_ws.col_values(first_seen_col)
+        inserts: list[tuple[int, str]] = []
+        last_date: str | None = None
+        listing_count = 0
+        for i, val in enumerate(fs_vals[1:], start=2):
+            if not val:
+                continue
+            listing_count += 1
+            d = val[:10]  # YYYY-MM-DD from ISO format
+            if d != last_date:
+                inserts.append((i, d))
+                last_date = d
+
+        # 4. Insert dividers bottom-up to avoid shifting earlier row numbers
+        for row_num, d in sorted(inserts, key=lambda t: -t[0]):
+            divider_text = f"═══  {d}  ═══"
+            divider = [divider_text] + [""] * (len(LISTING_HEADERS) - 1)
+            self.listings_ws.insert_rows(
+                [divider],
+                row=row_num,
+                value_input_option="USER_ENTERED",
+            )
+
+        return len(inserts), listing_count
 
     def rebuild_listings_grouped(self, listings: list[Listing]) -> tuple[int, int]:
         """Clear the Listings tab and rewrite, grouped by first_seen date.

@@ -340,6 +340,23 @@ def sheet_test_cmd() -> None:
     console.print(f"[green]Done.[/green] inserted={inserted} updated={updated}")
 
 
+@cli.command("reorganize")
+def reorganize_cmd() -> None:
+    """Sort the Listings tab oldest → newest (top → bottom) and rebuild day dividers.
+
+    Uses Google Sheets' native sort, which preserves cell formatting on
+    listing rows — your highlights, colors, and manual annotations move
+    with their rows and are not lost. Existing date dividers are removed
+    and re-created in the correct positions.
+    """
+    from .sheets import SheetsClient
+    sheets = SheetsClient()
+    console.print("[bold]Reorganizing Listings tab — this preserves your highlights.[/bold]")
+    groups, listings_count = sheets.reorganize_oldest_first()
+    console.print(f"[green]Done.[/green] {listings_count} listings sorted, {groups} day groups.")
+    console.print(f"[cyan]Sheet URL[/cyan] {sheets.workbook_url}")
+
+
 @cli.command("clean")
 @click.option("--dry-run", is_flag=True, help="Report what would be removed without changing anything.")
 def clean_cmd(dry_run: bool) -> None:
