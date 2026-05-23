@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Iterable
 
 import gspread
@@ -137,6 +137,74 @@ class SheetsClient:
             self.listings_ws.delete_rows(2, last)
             return last - 1
         return 0
+
+    def upsert_with_daily_group(self, listings: Iterable[Listing]) -> tuple[int, int]:
+        """Upsert listings without wiping formatting.
+
+        - Existing listings (matched by listing_id in column A) get their data
+          updated in place via batch_update. Cell formatting (colors, bold,
+          highlights, manual annotations in other columns) is preserved.
+        - New listings get inserted at the top of the sheet under a divider
+          for today's date. If today's divider already exists from an earlier
+          run, new rows are inserted just below it. Pre-existing day groups
+          and their listings stay put.
+
+        Returns (inserted, updated).
+        """
+        today_str = date.today().isoformat()
+        today_divider_prefix = f"═══  {today_str}"
+        last_col = _col_letter(len(LISTING_HEADERS))
+
+        col_a = self.listings_ws.col_values(1)
+
+        today_divider_row: int | None = None
+        existing_rows: dict[str, int] = {}
+        for i, val in enumerate(col_a[1:], start=2):
+            if not val:
+                continue
+            if val.startswith("═══"):
+                if val.startswith(today_divider_prefix) and today_divider_row is None:
+                    today_divider_row = i
+                continue
+            existing_rows[val] = i
+
+        update_batches: list[dict[str, Any]] = []
+        new_rows: list[list[str]] = []
+        inserted = updated = 0
+
+        for listing in listings:
+            row = _listing_to_row(listing)
+            if listing.listing_id in existing_rows:
+                row_num = existing_rows[listing.listing_id]
+                update_batches.append({
+                    "range": f"A{row_num}:{last_col}{row_num}",
+                    "values": [row],
+                })
+                updated += 1
+            else:
+                new_rows.append(row)
+                inserted += 1
+
+        if update_batches:
+            self.listings_ws.batch_update(update_batches, value_input_option="USER_ENTERED")
+
+        if new_rows:
+            if today_divider_row is None:
+                divider_text = f"═══  {today_str}  ═══"
+                divider = [divider_text] + [""] * (len(LISTING_HEADERS) - 1)
+                self.listings_ws.insert_rows(
+                    [divider, *new_rows],
+                    row=2,
+                    value_input_option="USER_ENTERED",
+                )
+            else:
+                self.listings_ws.insert_rows(
+                    new_rows,
+                    row=today_divider_row + 1,
+                    value_input_option="USER_ENTERED",
+                )
+
+        return inserted, updated
 
     def rebuild_listings_grouped(self, listings: list[Listing]) -> tuple[int, int]:
         """Clear the Listings tab and rewrite, grouped by first_seen date.

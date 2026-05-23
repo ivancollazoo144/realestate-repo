@@ -143,14 +143,11 @@ def run_cmd(source: str, dry_run: bool, max_listings: int | None) -> None:
         new_count = sum(1 for l in accepted_listings if upsert_listing(conn, l))
     console.print(f"[cyan]DB[/cyan] upserted {len(accepted_listings)} ({new_count} new)")
 
-    # Rebuild the sheet from the full DB, grouped by first_seen date with
-    # divider rows between days. Newest day at the top.
-    from .db import all_listings
-    with connect() as conn:
-        full_db = all_listings(conn)
+    # Upsert into the sheet preserving cell formatting on existing rows.
+    # New listings appear under a divider for today's date at the top.
     sheets = SheetsClient()
-    groups, total_rows = sheets.rebuild_listings_grouped(full_db)
-    console.print(f"[cyan]Sheet[/cyan] rebuilt — {groups} date groups, {total_rows} rows (incl. dividers)")
+    inserted, updated = sheets.upsert_with_daily_group(accepted_listings)
+    console.print(f"[cyan]Sheet[/cyan] inserted={inserted} (under today's date divider) updated={updated}")
     console.print(f"[cyan]Sheet URL[/cyan] {sheets.workbook_url}")
 
 
@@ -403,10 +400,13 @@ def clean_cmd(dry_run: bool) -> None:
     else:
         console.print(f"\n[cyan]DB[/cyan] no listings to remove")
 
-    # Rebuild the sheet from the kept set, grouped by first_seen date.
+    # `clean` intentionally rebuilds the sheet from scratch, which DOES wipe
+    # cell formatting. Use only when you want a full re-sync (e.g. after
+    # tightening filters). Normal scrape runs use the format-preserving path.
     sheets = SheetsClient()
     groups, total_rows = sheets.rebuild_listings_grouped(kept)
     console.print(f"[cyan]Sheet[/cyan] rebuilt — {groups} date groups, {total_rows} rows (incl. dividers)")
+    console.print(f"[yellow]Note: `clean` wipes cell formatting (highlights, colors). Use sparingly.[/yellow]")
     console.print(f"[cyan]Sheet URL[/cyan] {sheets.workbook_url}")
 
 
