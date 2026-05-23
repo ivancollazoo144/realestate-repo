@@ -8,7 +8,7 @@ from gspread.exceptions import SpreadsheetNotFound, WorksheetNotFound
 
 from .config import CONFIG, Config
 from .google_auth import get_credentials
-from .sources.base import Listing
+from .sources.base import Listing  # noqa: F401 — used in rebuild_listings_grouped type hint
 
 LISTING_HEADERS: list[str] = [
     "listing_id", "source", "type", "price", "beds", "baths", "sqft", "lot_sqft",
@@ -137,3 +137,38 @@ class SheetsClient:
             self.listings_ws.delete_rows(2, last)
             return last - 1
         return 0
+
+    def rebuild_listings_grouped(self, listings: list[Listing]) -> tuple[int, int]:
+        """Clear the Listings tab and rewrite, grouped by first_seen date.
+
+        Newest date appears first. Within each day group, sorted by source
+        then by price desc. A divider row separates each date group.
+
+        Returns (date_groups, total_rows_written) — total includes dividers.
+        """
+        self.clear_listings_data()
+
+        if not listings:
+            return 0, 0
+
+        by_date: dict[str, list[Listing]] = {}
+        for l in listings:
+            key = l.first_seen.date().isoformat() if l.first_seen else "(unknown)"
+            by_date.setdefault(key, []).append(l)
+
+        rows: list[list[str]] = []
+        for date_key in sorted(by_date.keys(), reverse=True):
+            group = sorted(
+                by_date[date_key],
+                key=lambda x: (x.source, -(x.price or 0)),
+            )
+            divider_text = f"═══  {date_key}  —  {len(group)} listings  ═══"
+            divider_row = [divider_text] + [""] * (len(LISTING_HEADERS) - 1)
+            rows.append(divider_row)
+            for l in group:
+                rows.append(_listing_to_row(l))
+
+        if rows:
+            self.listings_ws.append_rows(rows, value_input_option="USER_ENTERED")
+
+        return len(by_date), len(rows)
